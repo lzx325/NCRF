@@ -31,11 +31,11 @@ def computeEvaluationMask(maskDIR, resolution, level):
     dims = slide.level_dimensions[level]
     pixelarray = np.zeros(dims[0]*dims[1], dtype='uint')
     pixelarray = np.array(slide.read_region((0,0), level, dims))
-    distance = nd.distance_transform_edt(255 - pixelarray[:,:,0])
-    Threshold = 75/(resolution * pow(2, level) * 2) # 75µm is the equivalent size of 5 tumor cells
+    distance = nd.distance_transform_edt(255 - pixelarray[:,:,0]) # lizx: reverse those masks
+    Threshold = 75/(resolution * pow(2, level) * 2) # 75µm is the equivalent size of 5 tumor cells # lizx: keep the margin within 5 tumor cells positive
     binary = distance < Threshold
-    filled_image = nd.morphology.binary_fill_holes(binary)
-    evaluation_mask = measure.label(filled_image, connectivity = 2) 
+    filled_image = nd.morphology.binary_fill_holes(binary) # lizx: this is the mask for this level
+    evaluation_mask = measure.label(filled_image, connectivity = 2) # lizx: get connected components
     return evaluation_mask
     
     
@@ -57,14 +57,14 @@ def computeITCList(evaluation_mask, resolution, level):
     Returns:
         Isolated_Tumor_Cells: list of labels containing Isolated Tumor Cells
     """
-    max_label = np.amax(evaluation_mask)    
+    max_label = np.amax(evaluation_mask)  # lizx: np.amax and np.max are the same  
     properties = measure.regionprops(evaluation_mask)
     Isolated_Tumor_Cells = [] 
     threshold = 275/(resolution * pow(2, level))
     for i in range(0, max_label):
         if properties[i].major_axis_length < threshold:
             Isolated_Tumor_Cells.append(i+1)
-    return Isolated_Tumor_Cells
+    return Isolated_Tumor_Cells # connected component indices for isolated tumor cells
 
 
 def readCSVContent(csvDIR):
@@ -133,12 +133,12 @@ def compute_FP_TP_Probs(Ycorr, Xcorr, Probs, is_tumor, evaluation_mask, Isolated
     if (is_tumor):
         for i in range(0,len(Xcorr)):
             HittedLabel = evaluation_mask[int(Ycorr[i]/pow(2, level)), int(Xcorr[i]/pow(2, level))]
-            if HittedLabel == 0:
+            if HittedLabel == 0: # lizx: false positive branch
                 FP_probs.append(Probs[i])
                 key = 'FP ' + str(FP_counter)
                 FP_summary[key] = [Probs[i], Xcorr[i], Ycorr[i]]
                 FP_counter+=1
-            elif HittedLabel not in Isolated_Tumor_Cells:
+            elif HittedLabel not in Isolated_Tumor_Cells: # lizx: true positive branch
                 if (Probs[i]>TP_probs[HittedLabel-1]):
                     label = 'Label ' + str(HittedLabel)
                     detection_summary[label] = [Probs[i], Xcorr[i], Ycorr[i]]
@@ -178,8 +178,8 @@ def computeFROC(FROC_data):
         total_TPs.append((np.asarray(unlisted_TPs) >= Thresh).sum())    
     total_FPs.append(0)
     total_TPs.append(0)
-    total_FPs = np.asarray(total_FPs)/float(len(FROC_data[0]))
-    total_sensitivity = np.asarray(total_TPs)/float(sum(FROC_data[3]))      
+    total_FPs = np.asarray(total_FPs)/float(len(FROC_data[0])) # FP per slide
+    total_sensitivity = np.asarray(total_TPs)/float(sum(FROC_data[3])) # TP percentage of all
     return  total_FPs, total_sensitivity
    
    
@@ -209,20 +209,32 @@ if __name__ == "__main__":
     mask_folder = sys.argv[1]
     result_folder = sys.argv[2]
     result_file_list = []
-    result_file_list += [each for each in os.listdir(result_folder) if each.endswith('.csv')]
+    result_file_list += [each for each in sorted(os.listdir(result_folder)) if each.endswith('.csv')]
+    # TODO
+    result_file_list.remove("test_021.csv")
     
     EVALUATION_MASK_LEVEL = 5 # Image level at which the evaluation is done
     L0_RESOLUTION = 0.243 # pixel resolution at level 0
     
-    FROC_data = np.zeros((4, len(result_file_list)), dtype=np.object)
+    # lizx: This is to store heterogeneous data:
+    # row 0: case_id
+    # row 1: FP_probs
+    # row 2: TP_probs
+    # row 3: num_of_tumors
+    FROC_data = np.zeros((4, len(result_file_list)), dtype=np.object) 
+    # row 0: case_id
+    # row 1: detection_summary (TP_summary)
     FP_summary = np.zeros((2, len(result_file_list)), dtype=np.object)
+    # row 0: case_id
+    # row 1: FP_summary
     detection_summary = np.zeros((2, len(result_file_list)), dtype=np.object)
     
     ground_truth_test = []
     ground_truth_test += [each[0:8] for each in os.listdir(mask_folder) if each.endswith('.tif')]
+    # TODO
+    ground_truth_test.remove("test_021")
     ground_truth_test = set(ground_truth_test)
-
-    caseNum = 0    
+    caseNum = 0
     for case in result_file_list:
         print('Evaluating Performance on image:', case[0:-4])
         sys.stdout.flush()
@@ -230,6 +242,7 @@ if __name__ == "__main__":
         Probs, Xcorr, Ycorr = readCSVContent(csvDIR)
                 
         is_tumor = case[0:-4] in ground_truth_test
+        print(is_tumor)
         if (is_tumor):
             maskDIR = os.path.join(mask_folder, case[0:-4]) + '.tif'
             evaluation_mask = computeEvaluationMask(maskDIR, L0_RESOLUTION, EVALUATION_MASK_LEVEL)
@@ -237,14 +250,15 @@ if __name__ == "__main__":
         else:
             evaluation_mask = 0
             ITC_labels = []
-            
-           
+
         FROC_data[0][caseNum] = case
         FP_summary[0][caseNum] = case
         detection_summary[0][caseNum] = case
+        # FP_probs, TP_probs, num_of_tumors
+        # detection_summary, FP_summary [probability with coordinates]
         FROC_data[1][caseNum], FROC_data[2][caseNum], FROC_data[3][caseNum], detection_summary[1][caseNum], FP_summary[1][caseNum] = compute_FP_TP_Probs(Ycorr, Xcorr, Probs, is_tumor, evaluation_mask, ITC_labels, EVALUATION_MASK_LEVEL)
         caseNum += 1
-    
+        import ipdb;ipdb.set_trace()
     # Compute FROC curve 
     total_FPs, total_sensitivity = computeFROC(FROC_data)
     

@@ -119,7 +119,7 @@ class GridWSIPatchDataset(Dataset):
                     (y_idx + 0.5) * self._patch_size - self._crop_size / 2)
                 y_end = y_start + self._crop_size
                 img_flat[idx] = img[:, x_start:x_end, y_start:y_end]
-
+                
                 idx += 1
 
         return (img_flat, x_mask, y_mask)
